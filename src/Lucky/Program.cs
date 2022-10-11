@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using static System.Linq.Enumerable;
+using static System.Console;
 
 const string MCR_ADDRESS = "mcr.microsoft.com";
 const string GHCR_ADDRESS = "ghcr.io";
@@ -17,16 +18,20 @@ const string LIBRARY = "library";
 const string MANIFESTS = "manifests";
 const string LATEST = "latest";
 const string NULL = "null";
+const string ERROR = "Something went wrong.";
 
 Platform DefaultPlatform = new Platform(){Architecture = "amd64", Os = "linux"};
 HttpClient client = new HttpClient();
 string targetToken = string.Empty;
 string baseToken = string.Empty;
+int verboseLevel = 2;
+bool verbose = verboseLevel > 0;
+bool isImageFresh = false;
 
 var targetTag = "mcr.microsoft.com/dotnet/samples:aspnetapp";
 var baseTag = "mcr.microsoft.com/dotnet/aspnet:7.0";
 var ghcrImage = "ghcr.io/richlander/dotnet-docker/aspnetapp:main";
-// targetTag = ghcrImage;
+targetTag = ghcrImage;
 // var dhImage = "debian";
 
 Image targetImage = GetImageForAddress(targetTag);
@@ -41,30 +46,50 @@ ImageManifest targetImageManifest = await RequestImageFromRegistry(targetImage);
 
 Image baseImage = GetImageForAddress(baseTag);
 ImageManifest baseImageManifest = await RequestImageFromRegistry(baseImage);
-
 baseImage.Token = baseToken;
-string[] layers;
+
+if (verbose)
+{
+    WriteLine("Layer Update Check Yeoman v1.0");
+    WriteLine($"Image: {targetTag}");
+    WriteLine($"base: {baseTag}");
+    WriteLine();
+}
 
 if (targetImageManifest.MediaType is MANIFEST_HEADER &&
     baseImageManifest.MediaType is MANIFEST_HEADER)
 {
-    bool matches = IsLayersMatch(baseImageManifest, targetImageManifest, out layers);
-    Return(matches, layers);
+    if (verbose)
+    {
+        WriteLine($"Both images type: {MANIFEST_HEADER}");
+    }
+
+    isImageFresh = IsLayersMatch(baseImageManifest, targetImageManifest);
 }
 else if (targetImageManifest.MediaType is MANIFEST_HEADER &&
     baseImageManifest.MediaType is MANIFEST_LIST_HEADER)
 {
+    if (verbose)
+    {
+        WriteLine($"Image is type: {MANIFEST_HEADER}");
+        WriteLine($"Base Image is type: {MANIFEST_LIST_HEADER}");
+        WriteLine($"Validate for: {DefaultPlatform.Os}/{DefaultPlatform.Architecture}");
+    }
+
     Manifest baseShaManifest = GetManifestFlavor(baseImageManifest, DefaultPlatform);
     baseImage.Tag = baseShaManifest.Digest;
     ImageManifest baseShaImageManifest = await RequestImageFromRegistry(baseImage);
 
-    bool matches = IsLayersMatch(baseShaImageManifest, targetImageManifest, out layers);
-    Return(matches, layers);
+    isImageFresh = IsLayersMatch(baseShaImageManifest, targetImageManifest);
 }
 else if (targetImageManifest.MediaType is MANIFEST_LIST_HEADER &&
     baseImageManifest.MediaType is MANIFEST_LIST_HEADER)
 {
-    bool matches = true;
+    if (verbose)
+    {
+        WriteLine($"Both images type: {MANIFEST_LIST_HEADER}");
+        WriteLine($"Image includes {targetImageManifest.Manifests.Count} manifests that will be validated.");
+    }
     // Iterate over target manifests and then compare with baseimage manifests
     foreach (var targetManifest in targetImageManifest.Manifests)
     {
@@ -73,75 +98,65 @@ else if (targetImageManifest.MediaType is MANIFEST_LIST_HEADER &&
         var baseShaImageManfest = await RequestImageFromRegistry(baseImage);
         targetImage.Tag = targetManifest.Digest;
         var targetShaImageManfest = await RequestImageFromRegistry(targetImage);
-        bool match = IsLayersMatch(baseShaImageManfest, targetShaImageManfest, out layers);
-        if (match is false)
+
+        if (verboseLevel > 1)
         {
-            matches = match;
+            WriteLine();
+            string version = targetManifest.Platform.OsVersion is object ? $":{targetManifest.Platform.OsVersion}" : string.Empty;
+            WriteLine($"Validate for: {targetManifest.Platform.Os}{version}/{targetManifest.Platform.Architecture}");
+        }
+
+        bool match = IsLayersMatch(baseShaImageManfest, targetShaImageManfest);
+        if (!match)
+        {
+            isImageFresh = match;
             break;
         }
     }
-    Console.WriteLine(matches);
+
+    isImageFresh = true;
 }
 else
 {
-    throw new Exception("Something is wrong");
+    throw new Exception(ERROR);
 }
 
-async Task<string> GetGhcrToken(Image image)
-{
-    var def = new {Token = string.Empty};
-    string url = $"https://{GHCR_ADDRESS}/token?scope=repository:{image.Repo}:pull";
-    var token = await client.GetFromJsonAsync<RegistryToken>(url);
-    return token?.Token ?? string.Empty;
-}
+WriteLine();
+WriteLine("Image is fresh:");
+WriteLine(isImageFresh);
 
-void Return(bool matches, string[] layers)
-{
-    Console.WriteLine(matches);
-    Console.WriteLine();
-    Console.WriteLine("Last layer:");
-    Console.WriteLine($"Base: {layers[0]}");
-    Console.WriteLine($"Image: {layers[1]}");
-}
+return isImageFresh ? 0 : -1;
 
-bool IsLayersMatch(ImageManifest lower, ImageManifest higher, out string[] lastLayer)
+bool IsLayersMatch(ImageManifest lower, ImageManifest higher)
 {
-    lastLayer = new string[2];
-
     if (lower.Layers is null or [] ||
         higher.Layers is null or [])
     {
-        return false;
+        throw new Exception(ERROR);
     }
 
     foreach (int index in Range(0, lower.Layers.Count))
     {
         if (lower.Layers[index].Digest != higher.Layers[index].Digest)
         {
-            lastLayer[0] = lower.Layers[index].Digest ?? NULL;
-            lastLayer[1] = higher.Layers[index].Digest ?? NULL;
+            if (verbose)
+            {
+                WriteLine($"Layer {index} doesn't match.");
+                WriteLine($"Base image layer: {lower.Layers[index].Digest}");
+                WriteLine($"Image layer: {higher.Layers[index].Digest}");
+            }
             return false;
         }
+
+        if (verboseLevel > 1)
+        {
+            WriteLine($"Layer match: {lower.Layers[index].Digest}");
+        }
+
     }
 
-    int last = lower.Layers.Count - 1;
-    lastLayer[0] = lower.Layers[last].Digest ?? NULL;
-    lastLayer[1] = higher.Layers[last].Digest ?? NULL;
     return true;
 }
-
-// IEnumerable<string> GetPlatforms(ImageManifest imageManifest)
-// {
-//     if (imageManifest.Manifests is null)
-//     {
-//         yield return string.Empty;
-//     }
-
-//     foreach (Manifest m in imageManifest.Manifests)
-//     {
-        
-//     }
-// }
 
 Image GetImageForAddress(string address)
 {
@@ -228,6 +243,14 @@ async Task<ImageManifest> RequestImageFromRegistry(Image image)
 }
 
 MediaTypeWithQualityHeaderValue GetHeader(string value) => new(new(value), 0.5);
+
+async Task<string> GetGhcrToken(Image image)
+{
+    var def = new {Token = string.Empty};
+    string url = $"https://{GHCR_ADDRESS}/token?scope=repository:{image.Repo}:pull";
+    var token = await client.GetFromJsonAsync<RegistryToken>(url);
+    return token?.Token ?? string.Empty;
+}
 
 class RegistryToken
 {
