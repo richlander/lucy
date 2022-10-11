@@ -1,11 +1,10 @@
 ﻿using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using System.Text.Json;
 using System.Text.Json.Serialization;
 using static System.Linq.Enumerable;
 using static System.Console;
 
-const string MCR_ADDRESS = "mcr.microsoft.com";
+// const string MCR_ADDRESS = "mcr.microsoft.com";
 const string GHCR_ADDRESS = "ghcr.io";
 const string DH_ADDRESS = "registry-1.docker.io";
 const string MANIFEST_LIST_HEADER = "application/vnd.docker.distribution.manifest.list.v2+json";
@@ -17,27 +16,79 @@ const char SLASH_CHAR = '/';
 const string LIBRARY = "library";
 const string MANIFESTS = "manifests";
 const string LATEST = "latest";
-const string NULL = "null";
 const string ERROR = "Something went wrong.";
 
-Platform DefaultPlatform = new Platform(){Architecture = "amd64", Os = "linux"};
+/*
+**CLI args**
+Required:
+[image] [string]
+[baseImage] [string]
+
+Optional:
+--imageOs [string]
+--imageArch [string]
+--imageToken [string]
+--baseImageToken [string]
+--verbosity [int] 0-2
+*/
+
+var targetTag = string.Empty;
+var baseTag = string.Empty;
+// tokens are needed for private repos
+// GHRC also requires tokens for public repos
+string? targetToken = null;
+string? baseToken = null;
+int verboseLevel = 0;
+
+// args = new string[]
+// {
+//     "mcr.microsoft.com/dotnet/samples:aspnetapp",
+//     "mcr.microsoft.com/dotnet/aspnet:7.0",
+// };
+
+if (args.Length >= 2)
+{
+    targetTag = args[0];
+    baseTag = args[1];
+}
+else
+{
+    WriteLine("Incorrect arguments were provided.");
+    WriteHelp();
+    return;
+}
+
+if (args.Length > 2)
+{
+    targetToken = GetArg("--imagetoken");
+    baseToken = GetArg("--baseimagetoken");
+    string? verbosity = GetArg("--verbosity");
+    if (verbosity is not null)
+    {
+        int.TryParse(verbosity, out verboseLevel);
+    }
+}
+
 HttpClient client = new HttpClient();
-string targetToken = string.Empty;
-string baseToken = string.Empty;
-int verboseLevel = 2;
+Platform DefaultPlatform = new Platform("amd64" ,"linux");
 bool verbose = verboseLevel > 0;
 bool isImageFresh = false;
 
-var targetTag = "mcr.microsoft.com/dotnet/samples:aspnetapp";
-var baseTag = "mcr.microsoft.com/dotnet/aspnet:7.0";
-var ghcrImage = "ghcr.io/richlander/dotnet-docker/aspnetapp:main";
-targetTag = ghcrImage;
-// var dhImage = "debian";
+if (verbose)
+{
+    WriteLine("Layer Update Check Yeoman v1.0");
+    WriteLine($"Image: {targetTag}");
+    WriteLine($"base: {baseTag}");
+    WriteLine();
+}
 
+// Split the image address into components
 Image targetImage = GetImageForAddress(targetTag);
 targetImage.Token = targetToken;
+// Get a token from GHRC if one is missing
+// Assumes that the image is public; otherwise, this will fail
 if (targetImage.Registry is GHCR_ADDRESS &&
-    string.IsNullOrEmpty(targetImage.Token))
+    targetImage.Token is null)
 {
     targetImage.Token = await GetGhcrToken(targetImage);
 }
@@ -47,14 +98,6 @@ ImageManifest targetImageManifest = await RequestImageFromRegistry(targetImage);
 Image baseImage = GetImageForAddress(baseTag);
 ImageManifest baseImageManifest = await RequestImageFromRegistry(baseImage);
 baseImage.Token = baseToken;
-
-if (verbose)
-{
-    WriteLine("Layer Update Check Yeoman v1.0");
-    WriteLine($"Image: {targetTag}");
-    WriteLine($"base: {baseTag}");
-    WriteLine();
-}
 
 if (targetImageManifest.MediaType is MANIFEST_HEADER &&
     baseImageManifest.MediaType is MANIFEST_HEADER)
@@ -67,23 +110,34 @@ if (targetImageManifest.MediaType is MANIFEST_HEADER &&
     isImageFresh = IsLayersMatch(baseImageManifest, targetImageManifest);
 }
 else if (targetImageManifest.MediaType is MANIFEST_HEADER &&
-    baseImageManifest.MediaType is MANIFEST_LIST_HEADER)
+    baseImageManifest.MediaType is MANIFEST_LIST_HEADER &&
+    baseImageManifest.Manifests is not null)
 {
     if (verbose)
     {
         WriteLine($"Image is type: {MANIFEST_HEADER}");
         WriteLine($"Base Image is type: {MANIFEST_LIST_HEADER}");
         WriteLine($"Validate for: {DefaultPlatform.Os}/{DefaultPlatform.Architecture}");
+    } 
+
+    Manifest? baseShaManifest = GetManifestFlavor(baseImageManifest.Manifests, DefaultPlatform);
+
+    if (baseShaManifest is null)
+    {
+        WriteLine($"Platform manifest cannot be found in base image: {DefaultPlatform}");
     }
+    else
+    {
+        baseImage.Digest = baseShaManifest.Digest;
+        ImageManifest baseShaImageManifest = await RequestImageFromRegistry(baseImage);
 
-    Manifest baseShaManifest = GetManifestFlavor(baseImageManifest, DefaultPlatform);
-    baseImage.Tag = baseShaManifest.Digest;
-    ImageManifest baseShaImageManifest = await RequestImageFromRegistry(baseImage);
-
-    isImageFresh = IsLayersMatch(baseShaImageManifest, targetImageManifest);
+        isImageFresh = IsLayersMatch(baseShaImageManifest, targetImageManifest);
+    }
 }
 else if (targetImageManifest.MediaType is MANIFEST_LIST_HEADER &&
-    baseImageManifest.MediaType is MANIFEST_LIST_HEADER)
+    targetImageManifest.Manifests is not null &&
+    baseImageManifest.MediaType is MANIFEST_LIST_HEADER &&
+    baseImageManifest.Manifests is not null)
 {
     if (verbose)
     {
@@ -93,11 +147,18 @@ else if (targetImageManifest.MediaType is MANIFEST_LIST_HEADER &&
     // Iterate over target manifests and then compare with baseimage manifests
     foreach (var targetManifest in targetImageManifest.Manifests)
     {
-        var baseShaManifest = GetManifestFlavor(baseImageManifest, targetManifest.Platform);
-        baseImage.Tag = baseShaManifest.Digest;
-        var baseShaImageManfest = await RequestImageFromRegistry(baseImage);
-        targetImage.Tag = targetManifest.Digest;
+        targetImage.Digest = targetManifest.Digest;
         var targetShaImageManfest = await RequestImageFromRegistry(targetImage);
+        Manifest? baseShaManifest = GetManifestFlavor(baseImageManifest.Manifests, targetManifest.Platform);
+
+        if (baseShaManifest is null)
+        {
+            WriteLine($"Platform manifest cannot be found in base image: {targetManifest.Platform}");
+            break;
+        }
+
+        baseImage.Digest = baseShaManifest.Digest;
+        var baseShaImageManfest = await RequestImageFromRegistry(baseImage);
 
         if (verboseLevel > 1)
         {
@@ -124,8 +185,6 @@ else
 WriteLine();
 WriteLine("Image is fresh:");
 WriteLine(isImageFresh);
-
-return isImageFresh ? 0 : -1;
 
 bool IsLayersMatch(ImageManifest lower, ImageManifest higher)
 {
@@ -189,36 +248,17 @@ Image GetImageForAddress(string address)
         tag = LATEST;
     }
 
-    Image image = new()
-    {
-        Address = address,
-        Registry = registry,
-        Repo = repo,
-        Tag = tag
-    };
+    Image image = new(address, registry, repo, tag);
 
     return image;
 }
 
-Manifest GetManifestFlavor(ImageManifest manifestList, Platform platform)
-{
-    foreach (Manifest manifest in manifestList.Manifests)
-    {
-        if (manifest.Platform.Architecture == platform.Architecture &&
-            manifest.Platform.Os == platform.Os &&
-            manifest.Platform.OsVersion == platform.OsVersion)
-            {
-                return manifest;
-            }
-    }
-
-    return new Manifest();
-}
+Manifest? GetManifestFlavor(List<Manifest> manifestList, Platform platform) => manifestList.FirstOrDefault((m) => m.Platform == platform);
 
 async Task<ImageManifest> RequestImageFromRegistry(Image image)
 {
-    // string tag = string.IsNullOrEmpty(image.Tag) ? string.Empty : $":{image.Tag}";
-    string url = $"https://{image.Registry}/{API_VERSION}/{image.Repo}/{MANIFESTS}/{image.Tag}";
+    string tag = image.Digest ?? image.Tag;
+    string url = $"https://{image.Registry}/{API_VERSION}/{image.Repo}/{MANIFESTS}/{tag}";
     
     using HttpRequestMessage request = new(HttpMethod.Get, url);
     request.Headers.Accept.Add(GetHeader(MANIFEST_LIST_HEADER));
@@ -231,68 +271,79 @@ async Task<ImageManifest> RequestImageFromRegistry(Image image)
 
     var response = await client.SendAsync(request);
 
-    JsonSerializerOptions options = new();
     ImageManifest? manifest = null;
 
-    if (response.IsSuccessStatusCode && response.Content is not null)
+    if (response.IsSuccessStatusCode)
     {
         manifest = await response.Content.ReadFromJsonAsync<ImageManifest>();
     }
 
-    return manifest ?? new ImageManifest();
+    return manifest ?? throw new Exception($"Registry responded with {response.StatusCode} and message: {response.RequestMessage}");
 }
 
 MediaTypeWithQualityHeaderValue GetHeader(string value) => new(new(value), 0.5);
 
 async Task<string> GetGhcrToken(Image image)
 {
-    var def = new {Token = string.Empty};
     string url = $"https://{GHCR_ADDRESS}/token?scope=repository:{image.Repo}:pull";
-    var token = await client.GetFromJsonAsync<RegistryToken>(url);
-    return token?.Token ?? string.Empty;
+    RegistryToken? token = await client.GetFromJsonAsync<RegistryToken>(url);
+    return token?.Token ?? throw new Exception("Registry did not return valid token. Consider providing a token.");
 }
 
-class RegistryToken
+string? GetArg(string arg)
 {
-    public string? Token { get; set; }
+    foreach (int index in Range(2, args.Length - 2))
+    {
+        bool last = index == args.Length - 1;
+        if (arg == args[index].ToLowerInvariant() &&
+        !last)
+        {
+            return args[index + 1];
+        }
+    }
+
+    return null;
 }
 
- class Image
- {
-    public string? Address { get; set; }
-    public string? Registry { get; set; }
-    public string? Repo { get; set; }
-    public string? Tag { get; set; }
+void WriteHelp()
+{
+WriteLine("""
+**CLI args**
+Required:
+[image] [string]
+[baseImage] [string]
+
+Optional:
+--imageOs [string]
+--imageArch [string]
+--imageToken [string]
+--baseImageToken [string]
+--verbosity [int] 0-2
+""");
+}
+
+record RegistryToken(string? Token);
+
+record Image(string? Address, string Registry, string Repo, string Tag)
+{
+    public string? Digest { get; set; }
     public string? Token { get; set; }
     public string? Architecture { get; set; }
     public string? Os { get; set; }
- }
+};
 
-class ImageManifest
+record ImageManifest(int SchemaVersion, string MediaType)
 {
-    public int SchemaVersion { get; set; }
-    public string? MediaType { get; set; }
     public List<Layer>? Layers { get; set; }
     public List<Manifest>? Manifests { get; set; }
-}
+};
 
-class Layer
-{
-    public string? MediaType { get; set; }
-    public string? Digest { get; set; }
-}
+record Layer(string MediaType, string Digest);
 
-class Manifest
-{
-    public string? MediaType { get; set; }
-    public string? Digest { get; set; }
-    public Platform? Platform { get; set; }
-}
+record Manifest(string MediaType, string Digest, Platform Platform);
 
-class Platform
+record Platform(string Architecture, string Os)
 {
-    public string? Architecture { get; set; }
-    public string? Os { get; set; }
     [JsonPropertyName("os.version")]
     public string? OsVersion { get; set; }
-}
+};
