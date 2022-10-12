@@ -4,19 +4,20 @@ using System.Text.Json.Serialization;
 using static System.Linq.Enumerable;
 using static System.Console;
 
-// const string MCR_ADDRESS = "mcr.microsoft.com";
 const string GHCR_ADDRESS = "ghcr.io";
 const string DH_ADDRESS = "index.docker.io";
+const string DH_LIBRARY = "library";
 const string MANIFEST_LIST_HEADER = "application/vnd.docker.distribution.manifest.list.v2+json";
 const string MANIFEST_HEADER = "application/vnd.docker.distribution.manifest.v2+json";
 const string API_VERSION = "v2";
 const char TAG_CHAR = ':';
 const char DOT_CHAR = '.';
 const char SLASH_CHAR = '/';
-const string LIBRARY = "library";
 const string MANIFESTS = "manifests";
 const string LATEST = "latest";
 const string ERROR = "Something went wrong.";
+const string FRESH = "fresh";
+const string STALE = "stale";
 
 /*
 **CLI args**
@@ -35,26 +36,10 @@ Optional:
 var targetTag = string.Empty;
 var baseTag = string.Empty;
 // tokens are needed for private repos
-// GHRC also requires tokens for public repos
+// GHCR and DH also require tokens for public repos
 string? targetToken = null;
 string? baseToken = null;
 int verboseLevel = 0;
-
-// args = new string[]
-// {
-//     "mcr.microsoft.com/dotnet/samples:aspnetapp",
-//     "mcr.microsoft.com/dotnet/aspnet:7.0",
-// };
-// args = new string[]
-// {
-//     "mcr.microsoft.com/dotnet/samples:aspnetapp",
-//     "debian:bullseye-slim",
-// };
-// args = new string[]
-// {
-//     "ghcr.io/richlander/dotnet-docker:main",
-//     "mcr.microsoft.com/dotnet/aspnet:7.0",
-// };
 
 if (args.Length >= 2)
 {
@@ -80,26 +65,34 @@ if (args.Length > 2)
 }
 
 HttpClient client = new HttpClient();
+// Perhaps a way of setting this via args is needed
 Platform DefaultPlatform = new Platform("amd64" ,"linux");
 bool verbose = verboseLevel > 0;
 bool isImageFresh = false;
 
 if (verbose)
 {
-    WriteLine("Layer Update Check Yeoman v1.0");
-    WriteLine($"Image: {targetTag}");
-    WriteLine($"base: {baseTag}");
+    WriteLine("Layer Update Check Yeoman (Lucy) v1.0");
+    WriteLine($"Target image: {targetTag}");
+    WriteLine($"Base image  : {baseTag}");
     WriteLine();
 }
 
 // Split the image address into components
+// Load image from registry
+// Save into various record types
 Image targetImage = GetImageForAddress(targetTag);
 targetImage.Token = targetToken;
-ImageManifest targetImageManifest = await RequestImageFromRegistry(targetImage);
+ImageManifest targetImageManifest = await GetManifestFromRegistry(targetImage);
 Image baseImage = GetImageForAddress(baseTag);
-ImageManifest baseImageManifest = await RequestImageFromRegistry(baseImage);
+ImageManifest baseImageManifest = await GetManifestFromRegistry(baseImage);
 baseImage.Token = baseToken;
 
+// https://docs.docker.com/registry/spec/manifest-v2-2/
+// Images can be of two main types:
+// Basic images -- Manifest
+// Multi-arch images -- Manifest lists
+// Validation differs based on the image returned
 if (targetImageManifest.MediaType is MANIFEST_HEADER &&
     baseImageManifest.MediaType is MANIFEST_HEADER)
 {
@@ -121,6 +114,7 @@ else if (targetImageManifest.MediaType is MANIFEST_HEADER &&
         WriteLine($"Validate for: {DefaultPlatform.Os}/{DefaultPlatform.Architecture}");
     } 
 
+    // Get the manifest flavor that matches the platform of target image
     Manifest? baseShaManifest = GetManifestFlavor(baseImageManifest.Manifests, DefaultPlatform);
 
     if (baseShaManifest is null)
@@ -130,7 +124,7 @@ else if (targetImageManifest.MediaType is MANIFEST_HEADER &&
     else
     {
         baseImage.Digest = baseShaManifest.Digest;
-        ImageManifest baseShaImageManifest = await RequestImageFromRegistry(baseImage);
+        ImageManifest baseShaImageManifest = await GetManifestFromRegistry(baseImage);
 
         isImageFresh = IsLayersMatch(baseShaImageManifest, targetImageManifest);
     }
@@ -149,17 +143,18 @@ else if (targetImageManifest.MediaType is MANIFEST_LIST_HEADER &&
     foreach (var targetManifest in targetImageManifest.Manifests)
     {
         targetImage.Digest = targetManifest.Digest;
-        var targetShaImageManfest = await RequestImageFromRegistry(targetImage);
+        var targetShaImageManifest = await GetManifestFromRegistry(targetImage);
         Manifest? baseShaManifest = GetManifestFlavor(baseImageManifest.Manifests, targetManifest.Platform);
 
         if (baseShaManifest is null)
         {
             WriteLine($"Platform manifest cannot be found in base image: {targetManifest.Platform}");
+            isImageFresh = false;
             break;
         }
 
         baseImage.Digest = baseShaManifest.Digest;
-        var baseShaImageManfest = await RequestImageFromRegistry(baseImage);
+        var baseShaImageManfest = await GetManifestFromRegistry(baseImage);
 
         if (verboseLevel > 1)
         {
@@ -168,24 +163,28 @@ else if (targetImageManifest.MediaType is MANIFEST_LIST_HEADER &&
             WriteLine($"Validate for: {targetManifest.Platform.Os}{version}/{targetManifest.Platform.Architecture}");
         }
 
-        bool match = IsLayersMatch(baseShaImageManfest, targetShaImageManfest);
+        bool match = IsLayersMatch(baseShaImageManfest, targetShaImageManifest);
         if (!match)
         {
             isImageFresh = match;
             break;
         }
-    }
 
-    isImageFresh = true;
+        isImageFresh = true;
+    }
 }
 else
 {
     throw new Exception(ERROR);
 }
 
-WriteLine();
-WriteLine("Image is fresh:");
-WriteLine(isImageFresh);
+if (verbose)
+{
+    WriteLine();
+    WriteLine("Image state:");
+}
+
+WriteLine(isImageFresh ? FRESH : STALE);
 
 bool IsLayersMatch(ImageManifest lower, ImageManifest higher)
 {
@@ -195,6 +194,8 @@ bool IsLayersMatch(ImageManifest lower, ImageManifest higher)
         throw new Exception(ERROR);
     }
 
+    // Layers will match for fresh images
+    // One or more layers will not match for stale images
     foreach (int index in Range(0, lower.Layers.Count))
     {
         if (lower.Layers[index].Digest != higher.Layers[index].Digest)
@@ -202,8 +203,8 @@ bool IsLayersMatch(ImageManifest lower, ImageManifest higher)
             if (verbose)
             {
                 WriteLine($"Layer {index} doesn't match.");
-                WriteLine($"Base image layer: {lower.Layers[index].Digest}");
                 WriteLine($"Image layer: {higher.Layers[index].Digest}");
+                WriteLine($"Base image layer: {lower.Layers[index].Digest}");
             }
             return false;
         }
@@ -212,12 +213,13 @@ bool IsLayersMatch(ImageManifest lower, ImageManifest higher)
         {
             WriteLine($"Layer match: {lower.Layers[index].Digest}");
         }
-
     }
 
     return true;
 }
 
+// Break address into component parts
+// Translate Docker Hub addresses into canonical form
 Image GetImageForAddress(string address)
 {
     int firstDot = address.IndexOf(DOT_CHAR);
@@ -237,7 +239,7 @@ Image GetImageForAddress(string address)
     {
         registry = DH_ADDRESS;
         repo = tagStart > 0 ? address.Substring(0, tagStart) : address;
-        repo = $"{LIBRARY}/{repo}";
+        repo = $"{DH_LIBRARY}/{repo}";
     }
     else
     {
@@ -255,11 +257,13 @@ Image GetImageForAddress(string address)
     return image;
 }
 
+// Get manifest for a given platform
 Manifest? GetManifestFlavor(List<Manifest> manifestList, Platform platform) => manifestList.FirstOrDefault((m) => m.Platform == platform);
 
-async Task<ImageManifest> RequestImageFromRegistry(Image image)
+// Get Manifest from registry
+async Task<ImageManifest> GetManifestFromRegistry(Image image)
 {
-    // Get a token from GHRC if one is missing
+    // Get a token from GHRC or DH if one is missing
     // Assumes that the image is public; otherwise, this will fail
     if (image.Registry is GHCR_ADDRESS &&
         image.Token is null)
@@ -344,6 +348,8 @@ Optional:
 """);
 }
 
+// Records that describe images and manifest object model
+// Primarily for JSON deserialization
 record RegistryToken(string? Token);
 
 record Image(string? Address, string Registry, string Repo, string Tag)
