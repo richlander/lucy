@@ -104,4 +104,4 @@ The following other features may be added.
 - Publish as global tool.
 - Publish as GitHub action.
 - Move to `dotnet` org.
-- 
+- Better error handling
