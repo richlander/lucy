@@ -101,7 +101,9 @@ The following other features may be added.
 - Call URL if image is stale (likely modeled around [`repository-dispatch`](https://github.com/orgs/community/discussions/26384)) per CLI-provided URL.
 - Enable setting platform of target image (instead of assuming `linux/amd64`).
 - Retry logic for registry.
+- Better error handling
+- Move to `dotnet` org.
 - Publish as global tool.
 - Publish as GitHub action.
-- Move to `dotnet` org.
-- Better error handling
+- Publish as a container image.
+- Action keeps the container image up to date. It's circular!
