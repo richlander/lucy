@@ -4,17 +4,17 @@ using System.Text.Json.Serialization;
 using static System.Linq.Enumerable;
 using static System.Console;
 
-const string GHCR_ADDRESS = "ghcr.io";
-const string DH_ADDRESS = "index.docker.io";
-const string DH_LIBRARY = "library";
-const string MANIFEST_LIST_HEADER = "application/vnd.docker.distribution.manifest.list.v2+json";
-const string MANIFEST_HEADER = "application/vnd.docker.distribution.manifest.v2+json";
-const string API_VERSION = "v2";
 const char TAG_CHAR = ':';
 const char DOT_CHAR = '.';
 const char SLASH_CHAR = '/';
-const string MANIFESTS = "manifests";
+const string GHCR_ADDRESS = "ghcr.io";
+const string DH_ADDRESS = "index.docker.io";
+const string DH_LIBRARY = "library";
 const string LATEST = "latest";
+const string MANIFEST_LIST_HEADER = "application/vnd.docker.distribution.manifest.list.v2+json";
+const string MANIFEST_HEADER = "application/vnd.docker.distribution.manifest.v2+json";
+const string API_VERSION = "v2";
+const string MANIFESTS = "manifests";
 const string ERROR = "Something went wrong.";
 const string FRESH = "fresh";
 const string STALE = "stale";
@@ -302,6 +302,7 @@ async Task<ImageManifest> GetManifestFromRegistry(Image image)
 
 MediaTypeWithQualityHeaderValue GetHeader(string value) => new(new(value), 0.5);
 
+// Public GHCR images require auth
 async Task<string> GetGhcrToken(Image image)
 {
     string url = $"https://{GHCR_ADDRESS}/token?scope=repository:{image.Repo}:pull";
@@ -309,6 +310,7 @@ async Task<string> GetGhcrToken(Image image)
     return token?.Token ?? throw new Exception("Registry did not return valid token. Consider providing a token.");
 }
 
+// Public DH images require auth
 async Task<string> GetDhcrToken(Image image)
 {
     string url = $"https://auth.docker.io/token?service=registry.docker.io&scope=repository:{image.Repo}:pull";
