@@ -6,7 +6,7 @@ using static System.Console;
 
 // const string MCR_ADDRESS = "mcr.microsoft.com";
 const string GHCR_ADDRESS = "ghcr.io";
-const string DH_ADDRESS = "registry-1.docker.io";
+const string DH_ADDRESS = "index.docker.io";
 const string MANIFEST_LIST_HEADER = "application/vnd.docker.distribution.manifest.list.v2+json";
 const string MANIFEST_HEADER = "application/vnd.docker.distribution.manifest.v2+json";
 const string API_VERSION = "v2";
@@ -43,6 +43,16 @@ int verboseLevel = 0;
 // args = new string[]
 // {
 //     "mcr.microsoft.com/dotnet/samples:aspnetapp",
+//     "mcr.microsoft.com/dotnet/aspnet:7.0",
+// };
+// args = new string[]
+// {
+//     "mcr.microsoft.com/dotnet/samples:aspnetapp",
+//     "debian:bullseye-slim",
+// };
+// args = new string[]
+// {
+//     "ghcr.io/richlander/dotnet-docker:main",
 //     "mcr.microsoft.com/dotnet/aspnet:7.0",
 // };
 
@@ -85,16 +95,7 @@ if (verbose)
 // Split the image address into components
 Image targetImage = GetImageForAddress(targetTag);
 targetImage.Token = targetToken;
-// Get a token from GHRC if one is missing
-// Assumes that the image is public; otherwise, this will fail
-if (targetImage.Registry is GHCR_ADDRESS &&
-    targetImage.Token is null)
-{
-    targetImage.Token = await GetGhcrToken(targetImage);
-}
-
 ImageManifest targetImageManifest = await RequestImageFromRegistry(targetImage);
-
 Image baseImage = GetImageForAddress(baseTag);
 ImageManifest baseImageManifest = await RequestImageFromRegistry(baseImage);
 baseImage.Token = baseToken;
@@ -232,10 +233,11 @@ Image GetImageForAddress(string address)
         registry = address.Substring(0, firstSlash);
         repo = tagStart > 0 ? address.Substring(registry.Length + 1, tagStart - registry.Length - 1) : address.Substring(registry.Length + 1);
     }
-    else if (address.StartsWith(LIBRARY))
+    else if (!address.Contains(SLASH_CHAR))
     {
         registry = DH_ADDRESS;
-        repo = tagStart > 0 ? address.Substring(LIBRARY.Length + 1, tagStart - LIBRARY.Length - 1) : address.Substring(LIBRARY.Length + 1);
+        repo = tagStart > 0 ? address.Substring(0, tagStart) : address;
+        repo = $"{LIBRARY}/{repo}";
     }
     else
     {
@@ -257,6 +259,19 @@ Manifest? GetManifestFlavor(List<Manifest> manifestList, Platform platform) => m
 
 async Task<ImageManifest> RequestImageFromRegistry(Image image)
 {
+    // Get a token from GHRC if one is missing
+    // Assumes that the image is public; otherwise, this will fail
+    if (image.Registry is GHCR_ADDRESS &&
+        image.Token is null)
+    {
+        image.Token = await GetGhcrToken(image);
+    }
+    else if (image.Registry is DH_ADDRESS &&
+        image.Token is null)
+    {
+        image.Token = await GetDhcrToken(image);
+    }
+
     string tag = image.Digest ?? image.Tag;
     string url = $"https://{image.Registry}/{API_VERSION}/{image.Repo}/{MANIFESTS}/{tag}";
     
@@ -286,6 +301,13 @@ MediaTypeWithQualityHeaderValue GetHeader(string value) => new(new(value), 0.5);
 async Task<string> GetGhcrToken(Image image)
 {
     string url = $"https://{GHCR_ADDRESS}/token?scope=repository:{image.Repo}:pull";
+    RegistryToken? token = await client.GetFromJsonAsync<RegistryToken>(url);
+    return token?.Token ?? throw new Exception("Registry did not return valid token. Consider providing a token.");
+}
+
+async Task<string> GetDhcrToken(Image image)
+{
+    string url = $"https://auth.docker.io/token?service=registry.docker.io&scope=repository:{image.Repo}:pull";
     RegistryToken? token = await client.GetFromJsonAsync<RegistryToken>(url);
     return token?.Token ?? throw new Exception("Registry did not return valid token. Consider providing a token.");
 }
