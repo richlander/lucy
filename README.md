@@ -107,3 +107,10 @@ The following other features may be added.
 - Publish as GitHub action.
 - Publish as a container image.
 - Action keeps the container image up to date. It's circular!
+
+## Useful links
+
+- https://github.com/orgs/community/discussions/26279
+- https://gist.github.com/eggplants/a046346571de66656f4d4d34de69fdd0
+- https://www.flypenguin.de/2021/07/30/auto-rebuild-docker-images-if-base-image-changes-using-github-actions/
+- https://github.com/lucacome/docker-image-update-checker
