@@ -18,7 +18,7 @@ jobs:
         RESULT: ${(cat result.txt)}
     - name: Invoke workflow without inputs
       uses: benc-uk/workflow-dispatch@v1
-      if: $RESULT == 'fresh'
+      if: ${{ env.RESULT == 'fresh' }}
       with:
         workflow: Docker
         token: ${{ secrets.PAT }}        
