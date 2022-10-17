@@ -31,6 +31,7 @@ Optional:
 --imageToken [string]
 --baseImageToken [string]
 --verbosity [int] 0-2
+--callOnStale [string]
 */
 
 var targetTag = string.Empty;
@@ -39,6 +40,8 @@ var baseTag = string.Empty;
 // GHCR and DH also require tokens for public repos
 string? targetToken = null;
 string? baseToken = null;
+string? callOnStale = null;
+string? callToken = null;
 int verboseLevel = 0;
 
 if (args.Length >= 2)
@@ -57,11 +60,9 @@ if (args.Length > 2)
 {
     targetToken = GetArg("--imagetoken");
     baseToken = GetArg("--baseimagetoken");
-    string? verbosity = GetArg("--verbosity");
-    if (verbosity is not null)
-    {
-        int.TryParse(verbosity, out verboseLevel);
-    }
+    callOnStale = GetArg("--callOnStale");
+    callToken = GetArg("--callToken");
+    verboseLevel = GetNumberArg("--verbosity");
 }
 
 HttpClient client = new HttpClient();
@@ -186,6 +187,11 @@ if (verbose)
 
 WriteLine(isImageFresh ? FRESH : STALE);
 
+if (callOnStale is not null)
+{
+    await CallOnStale(callOnStale, callToken);
+}
+
 bool IsLayersMatch(ImageManifest lower, ImageManifest higher)
 {
     if (lower.Layers is null or [] ||
@@ -300,8 +306,6 @@ async Task<ImageManifest> GetManifestFromRegistry(Image image)
     return manifest ?? throw new Exception($"Registry responded with {response.StatusCode} and message: {response.RequestMessage}");
 }
 
-MediaTypeWithQualityHeaderValue GetHeader(string value) => new(new(value), 0.5);
-
 // Public GHCR images require auth
 async Task<string> GetGhcrToken(Image image)
 {
@@ -318,6 +322,20 @@ async Task<string> GetDhcrToken(Image image)
     return token?.Token ?? throw new Exception("Registry did not return valid token. Consider providing a token.");
 }
 
+Task CallOnStale(string url, string? token)
+{
+    HttpRequestMessage request = new(HttpMethod.Get, url);
+    request.Headers.Accept.Add(GetHeader("application/vnd.github+json"));
+    if (token is not null)
+    {
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+    }
+
+    return client.SendAsync(request);
+}
+
+MediaTypeWithQualityHeaderValue GetHeader(string value) => new(new(value), 0.5);
+
 string? GetArg(string arg)
 {
     foreach (int index in Range(2, args.Length - 2))
@@ -333,6 +351,18 @@ string? GetArg(string arg)
     return null;
 }
 
+int GetNumberArg(string arg)
+{
+    string? value = GetArg(arg);
+    if (value is null)
+    {
+        return 0;
+    }
+
+    return int.TryParse(value, out int number) ? number : 0;
+}
+
+
 void WriteHelp()
 {
 WriteLine("""
@@ -347,6 +377,7 @@ Optional:
 --imageToken [string]
 --baseImageToken [string]
 --verbosity [int] 0-2
+--callOnStale [string]
 """);
 }
 

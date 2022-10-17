@@ -13,4 +13,8 @@ jobs:
 
     steps:
     - name: Check if image is fresh
-      run: docker run --rm ghcr.io/richlander/lucy:main ghcr.io/richlander/lucy:main mcr.microsoft.com/dotnet/nightly/runtime:7.0-jammy-chiseled
+      run: docker run --rm ghcr.io/richlander/lucy:main ghcr.io/richlander/lucy:main mcr.microsoft.com/dotnet/nightly/runtime:7.0-jammy-chiseled > result.txt
+      run: RESULT=$(cat result.txt)
+      if: $RESULT == "fresh"
+        with:
+          workflow: Docker
