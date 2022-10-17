@@ -16,6 +16,8 @@ jobs:
       run: docker run --rm ghcr.io/richlander/lucy:main ghcr.io/richlander/lucy:main mcr.microsoft.com/dotnet/nightly/runtime:7.0-jammy-chiseled > result.txt
       env:
         RESULT: ${(cat result.txt)}
+    - name: Print result
+      run: echo "Image is $RESULT"
     - name: Invoke workflow without inputs
       uses: benc-uk/workflow-dispatch@v1
       if: ${{ env.RESULT == 'fresh' }}
