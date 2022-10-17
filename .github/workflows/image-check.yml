@@ -17,10 +17,10 @@ jobs:
     - name: Collect result
       run: echo "freshness=$(cat result.txt)" >> $GITHUB_ENV
     - name: Print result
-      run: echo "Image is $RESULT"
+      run: echo "Image is $freshness"
     - name: Invoke workflow without inputs
       uses: benc-uk/workflow-dispatch@v1
-      if: ${{ env.freshness == 'fresh' }}
+      if: ${{ env.freshness == 'stale' }}
       with:
         workflow: Docker
         token: ${{ secrets.PAT }}        
