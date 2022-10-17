@@ -7,7 +7,7 @@ on:
 
 jobs:
 
-  build:
+  freshness-check:
 
     runs-on: ubuntu-latest
 
@@ -16,6 +16,9 @@ jobs:
       run: docker run --rm ghcr.io/richlander/lucy:main ghcr.io/richlander/lucy:main mcr.microsoft.com/dotnet/nightly/runtime:7.0-jammy-chiseled > result.txt
       env:
         RESULT: ${(cat result.txt)}
+    - name: Invoke workflow without inputs
+      uses: benc-uk/workflow-dispatch@v1
       if: $RESULT == 'fresh'
-        with:
-          workflow: Docker
+      with:
+        workflow: Docker
+        token: ${{ secrets.PAT }}        
