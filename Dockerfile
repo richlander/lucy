@@ -3,6 +3,5 @@ COPY . .
 RUN dotnet publish src/Lucy/Lucy.csproj -o /app
 
 FROM mcr.microsoft.com/dotnet/runtime:7.0
-COPY --from=build /app /app
-WORKDIR /app
+COPY --from=build /app .
 ENTRYPOINT [ "./lucy" ]
