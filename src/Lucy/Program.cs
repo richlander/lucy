@@ -185,9 +185,7 @@ if (verbose)
     WriteLine("Image state:");
 }
 
-// WriteLine(isImageFresh ? FRESH : STALE);
-
-WriteLine("state=fresh");
+WriteLine(isImageFresh ? FRESH : STALE);
 
 if (callOnStale is not null)
 {
