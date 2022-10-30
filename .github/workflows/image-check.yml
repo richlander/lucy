@@ -13,7 +13,7 @@ jobs:
 
     steps:
     - name: Check if image is fresh
-      run: docker run --rm ghcr.io/richlander/lucy:main ghcr.io/richlander/lucy:main mcr.microsoft.com/dotnet/runtime:7.0 --imageToken "${{ secrets.PAT }}" > result.txt
+      run: docker run --rm ghcr.io/richlander/lucy:main ghcr.io/richlander/lucy:main mcr.microsoft.com/dotnet/runtime:7.0 > result.txt
     - name: Collect result
       run: echo "freshness=$(cat result.txt)" >> $GITHUB_ENV
     - name: Print result
