@@ -5,7 +5,7 @@ on:
   schedule:
     - cron: '15 */12 * * *'
 
-jobs: ${{ secrets.GITHUB_TOKEN }}
+jobs:
 
   freshness-check:
 
