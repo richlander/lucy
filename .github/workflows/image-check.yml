@@ -13,14 +13,16 @@ jobs:
 
     steps:
     - name: Check if image is fresh
-      run: docker run --rm ghcr.io/richlander/lucy:main ghcr.io/richlander/lucy:main mcr.microsoft.com/dotnet/runtime:7.0 > result.txt
-    - name: Collect result
-      run: echo "freshness=$(cat result.txt)" >> $GITHUB_ENV
+      id: check
+      uses: richlander/container-base-image-check-action@main
+      with:
+        image: ghcr.io/richlander/lucy:main
+        base-image: mcr.microsoft.com/dotnet/runtime:7.0    
     - name: Print result
-      run: echo "Image is $freshness"
+      run: echo "Image is ${{steps.check.outputs.state}}"
     - name: Invoke workflow without inputs
       uses: benc-uk/workflow-dispatch@v1
-      if: ${{ env.freshness == 'stale' }}
+      if: ${{ steps.check.outputs.state == 'stale' }}
       with:
         workflow: Docker
         token: ${{ secrets.PAT }}        
