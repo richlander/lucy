@@ -13,11 +13,11 @@ lucy targetImageAddress baseImageAddress
 You can see this with the following examples.
 
 ```bash
-$ lucy mcr.microsoft.com/dotnet/samples:aspnetapp mcr.microsoft.com/dotnet/aspnet:7.0              
-fresh
-$ lucy mcr.microsoft.com/dotnet/runtime:7.0 debian:bullseye-slim             
-stale
-$ lucy ghcr.io/richlander/dotnet-docker/aspnetapp:nightly mcr.microsoft.com/dotnet/aspnet:7.0   
+$ ./lucy ghcr.io/richlander/lucy:main mcr.microsoft.com/dotnet/runtime:7.0
+{"image":"ghcr.io/richlander/lucy:main","baseImage":"mcr.microsoft.com/dotnet/runtime:7.0","state":"fresh","layer":"sha256:058f65a20fb5ccb9c513d000e1a8ef5b1eefa936edf2503afb391dd9233c3034"}
+$ ./lucy mcr.microsoft.com/dotnet/runtime:7.0 debian:bullseye-slim             
+{"image":"mcr.microsoft.com/dotnet/runtime:7.0","baseImage":"debian:bullseye-slim","state":"stale","layer":"sha256:0df644382ba7fd23e9e4166ec2a03ec88b6cc5f640fb45413ecd913ceb901e41"}
+$ ./lucy ghcr.io/richlander/dotnet-docker/aspnetapp:nightly mcr.microsoft.com/dotnet/aspnet:7.0 | jq -r .state
 fresh
 ```
 

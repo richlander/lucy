@@ -135,8 +135,14 @@ else if (targetImageManifest.MediaType is MANIFEST_LIST_HEADER &&
     // Iterate over target manifests and then compare with baseimage manifests
     foreach (var targetManifest in targetImageManifest.Manifests)
     {
-        targetImage.Digest = targetImageManifest.Config.Digest;
+        targetImage.Digest = targetManifest.Digest;
         var targetShaImageManifest = await GetManifestFromRegistry(targetImage);
+
+        if (targetManifest.Platform is null)
+        {
+            continue;
+        }
+
         Address? baseShaManifest = GetManifestFlavor(baseImageManifest.Manifests, targetManifest.Platform);
 
         if (baseShaManifest is null)
