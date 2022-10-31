@@ -22,7 +22,7 @@ jobs:
       run: echo "Image is ${{steps.check.outputs.state}}"
     - name: Invoke workflow without inputs
       uses: benc-uk/workflow-dispatch@v1
-      if: ${{ steps.check.outputs.state == 'stale' }}
+      if: ${{ steps.check.outputs.state != 'fresh' }}
       with:
         workflow: Docker
         token: ${{ secrets.PAT }}        
