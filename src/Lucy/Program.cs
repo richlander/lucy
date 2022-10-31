@@ -1,5 +1,6 @@
 ﻿using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using static System.Linq.Enumerable;
 using static System.Console;
@@ -15,24 +16,10 @@ const string MANIFEST_LIST_HEADER = "application/vnd.docker.distribution.manifes
 const string MANIFEST_HEADER = "application/vnd.docker.distribution.manifest.v2+json";
 const string API_VERSION = "v2";
 const string MANIFESTS = "manifests";
+const string BLOBS = "blobs";
 const string ERROR = "Something went wrong.";
 const string FRESH = "fresh";
 const string STALE = "stale";
-
-/*
-**CLI args**
-Required:
-[image] [string]
-[baseImage] [string]
-
-Optional:
---imageOs [string]
---imageArch [string]
---imageToken [string]
---baseImageToken [string]
---verbosity [int] 0-2
---callOnStale [string]
-*/
 
 var targetTag = string.Empty;
 var baseTag = string.Empty;
@@ -40,9 +27,8 @@ var baseTag = string.Empty;
 // GHCR and DH also require tokens for public repos
 string? targetToken = null;
 string? baseToken = null;
-string? callOnStale = null;
-string? callToken = null;
 int verboseLevel = 0;
+Dictionary<string, string> results = new();
 
 if (args.Length >= 2)
 {
@@ -60,16 +46,14 @@ if (args.Length > 2)
 {
     targetToken = GetArg("--imagetoken");
     baseToken = GetArg("--baseimagetoken");
-    callOnStale = GetArg("--callOnStale");
-    callToken = GetArg("--callToken");
     verboseLevel = GetNumberArg("--verbosity");
 }
 
 HttpClient client = new HttpClient();
 // Perhaps a way of setting this via args is needed
-Platform DefaultPlatform = new Platform("amd64" ,"linux");
 bool verbose = verboseLevel > 0;
 bool isImageFresh = false;
+string lastLayerChecked = string.Empty;
 
 if (verbose)
 {
@@ -77,6 +61,11 @@ if (verbose)
     WriteLine($"Target image: {targetTag}");
     WriteLine($"Base image  : {baseTag}");
     WriteLine();
+}
+else
+{
+    results.Add("image", targetTag);
+    results.Add("baseImage", baseTag);
 }
 
 // Split the image address into components
@@ -102,32 +91,35 @@ if (targetImageManifest.MediaType is MANIFEST_HEADER &&
         WriteLine($"Both images type: {MANIFEST_HEADER}");
     }
 
-    isImageFresh = IsLayersMatch(baseImageManifest, targetImageManifest);
+    isImageFresh = IsLayersMatch(baseImageManifest, targetImageManifest, out lastLayerChecked);
 }
 else if (targetImageManifest.MediaType is MANIFEST_HEADER &&
     baseImageManifest.MediaType is MANIFEST_LIST_HEADER &&
     baseImageManifest.Manifests is not null)
 {
+    targetImage.Digest = targetImageManifest.Config.Digest;
+    Platform platform = await GetPlatformFromRegistry(targetImage);
+
     if (verbose)
     {
         WriteLine($"Image is type: {MANIFEST_HEADER}");
         WriteLine($"Base Image is type: {MANIFEST_LIST_HEADER}");
-        WriteLine($"Validate for: {DefaultPlatform.Os}/{DefaultPlatform.Architecture}");
+        WriteLine($"Validate for: {platform.Os}/{platform.Architecture}");
     } 
 
     // Get the manifest flavor that matches the platform of target image
-    Manifest? baseShaManifest = GetManifestFlavor(baseImageManifest.Manifests, DefaultPlatform);
+    Address? platformManifest = GetManifestFlavor(baseImageManifest.Manifests, platform);
 
-    if (baseShaManifest is null)
+    if (platformManifest is null ||
+        platformManifest.Digest is null)
     {
-        WriteLine($"Platform manifest cannot be found in base image: {DefaultPlatform}");
+        WriteLine($"Platform manifest cannot be found in base image: {platform}");
     }
     else
     {
-        baseImage.Digest = baseShaManifest.Digest;
-        ImageManifest baseShaImageManifest = await GetManifestFromRegistry(baseImage);
-
-        isImageFresh = IsLayersMatch(baseShaImageManifest, targetImageManifest);
+        baseImage.Digest = platformManifest.Digest;
+        ImageManifest basePlatformImageManifest = await GetManifestFromRegistry(baseImage);
+        isImageFresh = IsLayersMatch(basePlatformImageManifest, targetImageManifest, out lastLayerChecked);
     }
 }
 else if (targetImageManifest.MediaType is MANIFEST_LIST_HEADER &&
@@ -143,9 +135,9 @@ else if (targetImageManifest.MediaType is MANIFEST_LIST_HEADER &&
     // Iterate over target manifests and then compare with baseimage manifests
     foreach (var targetManifest in targetImageManifest.Manifests)
     {
-        targetImage.Digest = targetManifest.Digest;
+        targetImage.Digest = targetImageManifest.Config.Digest;
         var targetShaImageManifest = await GetManifestFromRegistry(targetImage);
-        Manifest? baseShaManifest = GetManifestFlavor(baseImageManifest.Manifests, targetManifest.Platform);
+        Address? baseShaManifest = GetManifestFlavor(baseImageManifest.Manifests, targetManifest.Platform);
 
         if (baseShaManifest is null)
         {
@@ -164,7 +156,7 @@ else if (targetImageManifest.MediaType is MANIFEST_LIST_HEADER &&
             WriteLine($"Validate for: {targetManifest.Platform.Os}{version}/{targetManifest.Platform.Architecture}");
         }
 
-        bool match = IsLayersMatch(baseShaImageManfest, targetShaImageManifest);
+        bool match = IsLayersMatch(baseShaImageManfest, targetShaImageManifest, out lastLayerChecked);
         if (!match)
         {
             isImageFresh = match;
@@ -183,16 +175,35 @@ if (verbose)
 {
     WriteLine();
     WriteLine("Image state:");
+    WriteLine(isImageFresh ? FRESH : STALE);
 }
-
-WriteLine(isImageFresh ? FRESH : STALE);
-
-if (callOnStale is not null)
+else
 {
-    await CallOnStale(callOnStale, callToken);
+    string state = isImageFresh ? FRESH : STALE;
+    results.Add("state", state);
+    results.Add("layer", lastLayerChecked);
+    string json = JsonSerializer.Serialize(results);
+    WriteLine(json);
 }
 
-bool IsLayersMatch(ImageManifest lower, ImageManifest higher)
+void WriteHelp()
+{
+    WriteLine("""
+**CLI args**
+Required:
+[image] [string]
+[baseImage] [string]
+
+Optional:
+--imageOs [string]
+--imageArch [string]
+--imageToken [string]
+--baseImageToken [string]
+--verbosity [int] 0-2
+""");
+}
+
+bool IsLayersMatch(ImageManifest lower, ImageManifest higher, out string lastLayerChecked)
 {
     if (lower.Layers is null or [] ||
         higher.Layers is null or [])
@@ -212,6 +223,8 @@ bool IsLayersMatch(ImageManifest lower, ImageManifest higher)
                 WriteLine($"Image layer: {higher.Layers[index].Digest}");
                 WriteLine($"Base image layer: {lower.Layers[index].Digest}");
             }
+
+            lastLayerChecked = lower.Layers[index].Digest;
             return false;
         }
 
@@ -221,6 +234,7 @@ bool IsLayersMatch(ImageManifest lower, ImageManifest higher)
         }
     }
 
+    lastLayerChecked = lower.Layers[lower.Layers.Count - 1].Digest;
     return true;
 }
 
@@ -264,7 +278,7 @@ Image GetImageForAddress(string address)
 }
 
 // Get manifest for a given platform
-Manifest? GetManifestFlavor(List<Manifest> manifestList, Platform platform) => manifestList.FirstOrDefault((m) => m.Platform == platform);
+Address? GetManifestFlavor(List<Address> manifestList, Platform platform) => manifestList.FirstOrDefault((m) => m.Platform == platform);
 
 // Get Manifest from registry
 async Task<ImageManifest> GetManifestFromRegistry(Image image)
@@ -306,6 +320,28 @@ async Task<ImageManifest> GetManifestFromRegistry(Image image)
     return manifest ?? throw new Exception($"Registry responded with {response.StatusCode} and message: {response.RequestMessage}");
 }
 
+async Task<Platform> GetPlatformFromRegistry(Image image)
+{
+    string url = $"https://{image.Registry}/{API_VERSION}/{image.Repo}/{BLOBS}/{image.Digest}";
+    using HttpRequestMessage request = new(HttpMethod.Get, url);
+
+    if (!string.IsNullOrEmpty(image.Token))
+    {
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", image.Token);
+    }
+
+    var response = await client.SendAsync(request);
+
+    Platform? platform = null;
+
+    if (response.IsSuccessStatusCode)
+    {
+        platform = await response.Content.ReadFromJsonAsync<Platform>();
+    }
+
+    return platform ?? throw new Exception($"Registry responded with {response.StatusCode} and message: {response.RequestMessage}");
+}
+
 // Public GHCR images require auth
 async Task<string> GetGhcrToken(Image image)
 {
@@ -320,18 +356,6 @@ async Task<string> GetDhcrToken(Image image)
     string url = $"https://auth.docker.io/token?service=registry.docker.io&scope=repository:{image.Repo}:pull";
     RegistryToken? token = await client.GetFromJsonAsync<RegistryToken>(url);
     return token?.Token ?? throw new Exception("Registry did not return valid token. Consider providing a token.");
-}
-
-Task CallOnStale(string url, string? token)
-{
-    HttpRequestMessage request = new(HttpMethod.Get, url);
-    request.Headers.Accept.Add(GetHeader("application/vnd.github+json"));
-    if (token is not null)
-    {
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-    }
-
-    return client.SendAsync(request);
 }
 
 MediaTypeWithQualityHeaderValue GetHeader(string value) => new(new(value), 0.5);
@@ -362,25 +386,6 @@ int GetNumberArg(string arg)
     return int.TryParse(value, out int number) ? number : 0;
 }
 
-
-void WriteHelp()
-{
-WriteLine("""
-**CLI args**
-Required:
-[image] [string]
-[baseImage] [string]
-
-Optional:
---imageOs [string]
---imageArch [string]
---imageToken [string]
---baseImageToken [string]
---verbosity [int] 0-2
---callOnStale [string]
-""");
-}
-
 // Records that describe images and manifest object model
 // Primarily for JSON deserialization
 record RegistryToken(string? Token);
@@ -393,15 +398,16 @@ record Image(string? Address, string Registry, string Repo, string Tag)
     public string? Os { get; set; }
 };
 
-record ImageManifest(int SchemaVersion, string MediaType)
+record ImageManifest(int SchemaVersion, string MediaType, Address Config)
 {
-    public List<Layer>? Layers { get; set; }
-    public List<Manifest>? Manifests { get; set; }
+    public List<Address>? Layers { get; set; }
+    public List<Address>? Manifests { get; set; }
 };
 
-record Layer(string MediaType, string Digest);
-
-record Manifest(string MediaType, string Digest, Platform Platform);
+record Address(string MediaType, string Digest)
+{
+    public Platform? Platform { get; set; }
+};
 
 record Platform(string Architecture, string Os)
 {
